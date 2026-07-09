@@ -46,5 +46,5 @@
     <string name="token_encrypted_hint">Token 将加密存储在设备上</string>
     <string name="generate_token">一键生成 Token</string>
     <string name="token_auto_filled">已自动填充剪贴板中的 Token</string>
-    <string name="opensource_repo_url">https://github.com/yourusername/CFManager</string>
+    <string name="opensource_repo_url">https://github.com/Anji-318/cloudflare-manager-android</string>
 </resources>
