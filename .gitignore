@@ -35,6 +35,7 @@ output.json
 
 # Token and scripts
 token.txt
+git-config.txt
 *.bat
 
 # NDK
