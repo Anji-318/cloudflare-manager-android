@@ -27,6 +27,12 @@ Thumbs.db
 *.ap_
 output.json
 
+# Archives
+*.zip
+*.tar.gz
+*.tar
+*.rar
+
 # Token and scripts
 token.txt
 *.bat
