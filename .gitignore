@@ -27,5 +27,9 @@ Thumbs.db
 *.ap_
 output.json
 
+# Token and scripts
+token.txt
+*.bat
+
 # NDK
 obj/
