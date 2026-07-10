@@ -45,6 +45,116 @@ class CloudflareRepository @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) {
 
+    // Workers Analytics via GraphQL
+    suspend fun getWorkersRequestsToday(accountId: String): Result<Long> {
+        android.util.Log.d("CloudflareRepository", "GraphQL query for accountId: $accountId")
+        
+        // UTC 今日 0 点 ISO 8601 格式
+        val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        val year = now.get(java.util.Calendar.YEAR)
+        val month = now.get(java.util.Calendar.MONTH) + 1
+        val day = now.get(java.util.Calendar.DAY_OF_MONTH)
+        val since = String.format("%04d-%02d-%02dT00:00:00Z", year, month, day)
+        val until = String.format("%04d-%02d-%02dT23:59:59Z", year, month, day)
+
+        val query = buildString {
+            append("query GetWorkersRequests(")
+            append("$").append("accountTag: String!, ")
+            append("$").append("since: Time!, ")
+            append("$").append("until: Time!) { ")
+            append("viewer { accounts(filter: {accountTag: ")
+            append("$").append("accountTag}) { ")
+            append("workersInvocationsAdaptive(")
+            append("limit: 10000, ")
+            append("filter: { datetime_geq: ")
+            append("$").append("since, datetime_leq: ")
+            append("$").append("until }")
+            append(") { ")
+            append("sum { requests } } } } }")
+        }
+
+        val requestBody = """{"query":"${query}","variables":{"accountTag":"${escapeJson(accountId)}","since":"${since}","until":"${until}"}}"""
+        
+        android.util.Log.d("CloudflareRepository", "GraphQL request: $requestBody")
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/graphql")
+                    .post(requestBody.toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
+                val response = okHttpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+                android.util.Log.d("CloudflareRepository", "GraphQL raw response: $responseBody")
+                
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+                }
+                
+                val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
+                val errorsElement = jsonResponse["errors"]
+                if (errorsElement != null && errorsElement !is kotlinx.serialization.json.JsonNull) {
+                    val errors = errorsElement.jsonArray
+                    if (errors.isNotEmpty()) {
+                        val errorMsg = errors.joinToString("; ") { it.jsonObject["message"]?.jsonPrimitive?.contentOrNull ?: "" }
+                        return@withContext Result.failure(Exception("GraphQL error: $errorMsg"))
+                    }
+                }
+                
+                val data = jsonResponse["data"]?.jsonObject
+                val viewer = data?.get("viewer")?.jsonObject
+                val accounts = viewer?.get("accounts")?.jsonArray
+                android.util.Log.d("CloudflareRepository", "accounts size=${accounts?.size}")
+                
+                var totalRequests = 0L
+                accounts?.forEach { acc ->
+                    val invocations = acc.jsonObject["workersInvocationsAdaptive"]?.jsonArray
+                    android.util.Log.d("CloudflareRepository", "invocations size=${invocations?.size}")
+                    invocations?.forEach { item ->
+                        val sum = item.jsonObject["sum"]?.jsonObject
+                        val requests = sum?.get("requests")?.jsonPrimitive?.longOrNull ?: 0L
+                        totalRequests += requests
+                    }
+                }
+                
+                android.util.Log.d("CloudflareRepository", "totalRequests=$totalRequests")
+                Result.success(totalRequests)
+            } catch (e: Exception) {
+                android.util.Log.e("CloudflareRepository", "GraphQL exception: ${e.message}", e)
+                Result.failure(e)
+            }
+        }
+    }
+
+    // Workers Quota
+    suspend fun getWorkersQuota(accountId: String): Result<Long> {
+        return try {
+            val response = apiService.genericGet("accounts/${escapeJson(accountId)}/workers/quotas")
+            if (!response.success) {
+                return Result.failure(Exception(response.errorMessage()))
+            }
+            val quota = response.result?.jsonObject?.get("quota")?.jsonPrimitive?.longOrNull
+                ?: response.result?.jsonObject?.get("requests")?.jsonPrimitive?.longOrNull
+                ?: 100_000L
+            Result.success(quota)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // Get current account ID from API
+    suspend fun getCurrentAccountId(): String? {
+        return try {
+            val response = apiService.listAccounts()
+            if (response.success) {
+                response.result?.firstOrNull()?.id
+            } else null
+        } catch (e: Exception) {
+            android.util.Log.e("CloudflareRepository", "getCurrentAccountId error: ${e.message}")
+            null
+        }
+    }
+
     // Analytics
     suspend fun getAnalytics(
         zoneId: String,
