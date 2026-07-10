@@ -34,6 +34,19 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = rootProject.file("release-key.jks")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                val passwordFile = rootProject.file("release-key.txt")
+                storePassword = if (passwordFile.exists()) passwordFile.readText().trim() else ""
+                keyAlias = "release-key"
+                keyPassword = if (passwordFile.exists()) passwordFile.readText().trim() else ""
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -41,6 +54,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

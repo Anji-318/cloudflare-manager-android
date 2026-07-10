@@ -39,5 +39,9 @@ git-config.txt
 强制推送脚本.bat
 打包源码.bat
 
+# Signing keys
+release-key.jks
+release-key.txt
+
 # NDK
 obj/
