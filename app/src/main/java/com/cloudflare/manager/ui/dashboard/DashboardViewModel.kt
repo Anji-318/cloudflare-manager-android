@@ -27,6 +27,7 @@ data class DashboardUiState(
     val selectedZone: Zone? = null,
     val dnsRecords: List<DnsRecord> = emptyList(),
     val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
     val error: String? = null
 )
 
@@ -58,36 +59,72 @@ class DashboardViewModel @Inject constructor(
             .launchIn(viewModelScope)
     }
 
+    fun refresh() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRefreshing = true)
+            try {
+                loadDashboardDataInternal()
+            } finally {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+            }
+        }
+    }
+
     fun loadDashboardData() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val zonesResult = zoneRepository.listZones()
-                val zones = zonesResult.getOrDefault(emptyList())
-                val selected = _uiState.value.selectedZone
-                    ?: zones.firstOrNull()
-                    ?: _uiState.value.selectedZone
-
-                _uiState.value = _uiState.value.copy(
-                    zones = zones,
-                    zoneCount = zones.size,
-                    selectedZone = selected,
-                    isLoading = false
-                )
-
-                // 加载选中域名的 DNS
-                if (selected != null) {
-                    loadDnsForZone(selected.id)
-                }
-
-                // 获取所有域名的当天请求数总和
-                loadTotalRequests(zones)
+                loadDashboardDataInternal()
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     error = e.message ?: "加载失败"
                 )
             }
+        }
+    }
+
+    private suspend fun loadDashboardDataInternal() {
+        val zonesResult = zoneRepository.listZones()
+        val zones = zonesResult.getOrDefault(emptyList())
+        val selected = _uiState.value.selectedZone
+            ?: zones.firstOrNull()
+            ?: _uiState.value.selectedZone
+
+        _uiState.value = _uiState.value.copy(
+            zones = zones,
+            zoneCount = zones.size,
+            selectedZone = selected,
+            isLoading = false
+        )
+
+        // 加载选中域名的 DNS
+        if (selected != null) {
+            loadDnsForZone(selected.id)
+        }
+
+        val currentAccount = _uiState.value.currentAccount
+        var accountId = currentAccount?.accountId
+        android.util.Log.d("DashboardViewModel", "currentAccount=$currentAccount, accountId=$accountId")
+
+        // 如果 accountId 为空，尝试通过 API 获取
+        if (accountId.isNullOrBlank()) {
+            try {
+                val fetchedId = cloudflareRepository.getCurrentAccountId()
+                if (!fetchedId.isNullOrBlank()) {
+                    accountId = fetchedId
+                    android.util.Log.d("DashboardViewModel", "Fetched accountId from API: $accountId")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DashboardViewModel", "Failed to fetch accountId: ${e.message}")
+            }
+        }
+
+        // 加载 Workers 今日请求数
+        if (!accountId.isNullOrBlank()) {
+            loadWorkersRequests(accountId)
+        } else {
+            android.util.Log.w("DashboardViewModel", "accountId is null/blank, cannot load Workers requests")
         }
     }
 
@@ -111,28 +148,19 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadTotalRequests(zones: List<Zone>) {
-        if (zones.isEmpty()) return
-
-        val now = System.currentTimeMillis() / 1000
-        val todayStart = now - (now % 86400)  // 当天零点
-
-        var totalRequests = 0L
-        zones.forEach { zone ->
-            try {
-                val analyticsResult = cloudflareRepository.getAnalytics(
-                    zone.id,
-                    since = todayStart.toString(),
-                    until = now.toString()
-                )
-                analyticsResult.onSuccess { (summary, _) ->
-                    totalRequests += summary.totalRequests
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("DashboardViewModel", "analytics error for ${zone.name}: ${e.message}")
+    private suspend fun loadWorkersRequests(accountId: String) {
+        android.util.Log.d("DashboardViewModel", "Loading Workers requests for accountId: $accountId")
+        try {
+            val result = cloudflareRepository.getWorkersRequestsToday(accountId)
+            result.onSuccess { count ->
+                android.util.Log.d("DashboardViewModel", "Workers requests loaded: $count")
+                _uiState.value = _uiState.value.copy(requestCount = count)
+            }.onFailure { e ->
+                android.util.Log.e("DashboardViewModel", "Workers requests error: ${e.message}")
+                // 失败时保持原有值不变，不覆盖为0
             }
+        } catch (e: Exception) {
+            android.util.Log.e("DashboardViewModel", "Workers requests exception: ${e.message}")
         }
-
-        _uiState.value = _uiState.value.copy(requestCount = totalRequests)
     }
 }

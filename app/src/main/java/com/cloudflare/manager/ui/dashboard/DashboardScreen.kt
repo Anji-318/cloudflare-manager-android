@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,6 +58,7 @@ import com.cloudflare.manager.ui.theme.CfBlue
 import com.cloudflare.manager.ui.theme.CfOrange
 import com.cloudflare.manager.ui.theme.SuccessGreen
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     snackbarHostState: SnackbarHostState,
@@ -74,60 +76,66 @@ fun DashboardScreen(
         )
 
         Box(modifier = Modifier.fillMaxSize()) {
-            if (state.isLoading) {
+            if (state.isLoading && !state.isRefreshing) {
                 LoadingIndicator()
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                PullToRefreshBox(
+                    isRefreshing = state.isRefreshing,
+                    onRefresh = { viewModel.refresh() },
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    item { WelcomeSection(account = state.currentAccount) }
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard(
-                                title = "账户",
-                                value = state.accountCount.toString(),
-                                color = CfBlue,
-                                modifier = Modifier.weight(1f)
-                            )
-                            StatCard(
-                                title = "域名",
-                                value = state.zoneCount.toString(),
-                                color = CfOrange,
-                                modifier = Modifier.weight(1f)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item { WelcomeSection(account = state.currentAccount) }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                StatCard(
+                                    title = "账户",
+                                    value = state.accountCount.toString(),
+                                    color = CfBlue,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                StatCard(
+                                    title = "域名",
+                                    value = state.zoneCount.toString(),
+                                    color = CfOrange,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                StatCard(
+                                    title = "DNS",
+                                    value = state.dnsCount.toString(),
+                                    color = SuccessGreen,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                StatCard(
+                                    title = "今日请求",
+                                    value = formatRequestCount(state.requestCount),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        item {
+                            Text(
+                                text = "域名列表（点击切换）",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(top = 8.dp)
                             )
                         }
-                    }
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard(
-                                title = "DNS",
-                                value = state.dnsCount.toString(),
-                                color = SuccessGreen,
-                                modifier = Modifier.weight(1f)
-                            )
-                            StatCard(
-                                title = "请求",
-                                value = formatRequestCount(state.requestCount),
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f)
+                        items(state.zones, key = { it.id }) { zone ->
+                            ZoneListItem(
+                                zone = zone,
+                                isSelected = zone.id == state.selectedZone?.id,
+                                onClick = { viewModel.selectZone(zone) }
                             )
                         }
-                    }
-                    item {
-                        Text(
-                            text = "域名列表（点击切换）",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
-                    }
-                    items(state.zones, key = { it.id }) { zone ->
-                        ZoneListItem(
-                            zone = zone,
-                            isSelected = zone.id == state.selectedZone?.id,
-                            onClick = { viewModel.selectZone(zone) }
-                        )
                     }
                 }
             }
@@ -193,9 +201,7 @@ private fun ZoneListItem(
 private fun formatRequestCount(count: Long): String {
     return when {
         count <= 0 -> "-"
-        count >= 1_000_000 -> "${(count / 1_000_000.0).toInt()}M"
-        count >= 1_000 -> "${(count / 1_000.0).toInt()}K"
-        else -> count.toString()
+        else -> "%,d".format(java.util.Locale.getDefault(), count)
     }
 }
 
