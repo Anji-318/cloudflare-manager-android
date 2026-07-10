@@ -4,47 +4,37 @@ setlocal EnableDelayedExpansion
 
 for %%i in ("%CD%") do set PROJECT_NAME=%%~ni
 
-:: 读取版本号
+:: 读取版本号（尝试多种方式）
 set VER=unknown
 if exist "app\build.gradle.kts" (
-    for /f "tokens=2 delims==" %%a in ('findstr "versionName" app\build.gradle.kts') do (
-        set VER=%%a
-        set VER=!VER: =!
-        set VER=!VER:"=!
+    for /f "usebackq tokens=*" %%a in (`powershell -NoProfile -Command "[regex]::Match((Get-Content 'app\build.gradle.kts' -Raw), 'versionName\s*=\s*\"([^\"]+)\"').Groups[1].Value"`) do (
+        set "VER=%%a"
     )
 )
+if "!VER!"=="" set "VER=unknown"
 
-set "ZIP_NAME=%PROJECT_NAME%-v%VER%-src.zip"
+set "ZIP_NAME=%PROJECT_NAME%-v!VER!-src.zip"
+
 echo ========================================
 echo   %PROJECT_NAME% 源码打包
-echo   版本: %VER%
+echo   版本: !VER!
 echo ========================================
 echo.
 
-if exist "%ZIP_NAME%" del /f /q "%ZIP_NAME%"
+if exist "!ZIP_NAME!" del /f /q "!ZIP_NAME!"
 
-echo [打包] 正在生成 %ZIP_NAME% ...
+echo [打包] 正在生成 !ZIP_NAME! ...
 echo.
 
-powershell -NoProfile -Command "& {
-    $exclude = @('.git', '.gradle', '.idea', 'build', '.kotlin', 'release', '*.apk', '*.jks', '*-key.txt', 'local.properties', '.gitignore', 'git-config.txt', '强制推送脚本.bat', '会话记录备份.md');
-    $items = Get-ChildItem -Path '.' | Where-Object {
-        $item = $_;
-        $skip = $false;
-        foreach ($pattern in $exclude) {
-            if ($item.Name -like $pattern) { $skip = $true; break }
-        }
-        -not $skip
-    };
-    if ($items) {
-        Compress-Archive -Path $items.FullName -DestinationPath '%ZIP_NAME%' -Force;
-        $size = (Get-Item '%ZIP_NAME%').Length;
-        Write-Host ('[成功] 源码包已生成: %ZIP_NAME%');
-        Write-Host ('       大小: ' + [math]::Round($size/1MB, 2) + ' MB')
-    } else {
-        Write-Host '[错误] 没有可打包的文件'
-    }
-}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path @('app','gradle','.github','build.gradle.kts','settings.gradle.kts','gradle.properties','gradlew','gradlew.bat','README.md','Android智能编译脚本_v2.0.bat','打包源码.bat') -DestinationPath '!ZIP_NAME!' -Force"
+
+if exist "!ZIP_NAME!" (
+    for %%F in ("!ZIP_NAME!") do set "FSIZE=%%~zF"
+    echo [成功] 源码包已生成: !ZIP_NAME!
+    echo        大小: !FSIZE! bytes
+) else (
+    echo [错误] 打包失败
+)
 
 echo.
 echo 按任意键退出...
