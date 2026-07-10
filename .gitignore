@@ -36,7 +36,7 @@ output.json
 # Token and scripts
 token.txt
 git-config.txt
-*.bat
+强制推送脚本.bat
 
 # NDK
 obj/
