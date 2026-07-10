@@ -1,40 +1,38 @@
 @echo off
-chcp 65001 >/dev/null
-setlocal EnableDelayedExpansion
+chcp 65001 >nul
 
 for %%i in ("%CD%") do set PROJECT_NAME=%%~ni
 
-set VER=unknown
-if exist "app\build.gradle.kts" (
-    for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "[regex]::Match((Get-Content 'app\build.gradle.kts' -Raw), 'versionName\s*=\s*"([^"]+)"').Groups[1].Value"`) do (
-        set "VER=%%a"
-    )
-)
+powershell -NoProfile -Command "$ver = if (Test-Path 'app\build.gradle.kts') { [regex]::Match((Get-Content 'app\build.gradle.kts' -Raw), 'versionName\s*=\s*\"([^\"]+)\"').Groups[1].Value } else { 'unknown' }; if (-not $ver) { $ver = 'unknown' }; Set-Content -Path '.\_ver_tmp.txt' -Value $ver -NoNewline"
+
+set /p VER=<.\_ver_tmp.txt
+del /f /q .\_ver_tmp.txt >nul 2>&1
+
 if "!VER!"=="" set "VER=unknown"
 
-set "ZIP_NAME=%PROJECT_NAME%-v!VER!-src.zip"
+set "ZIP_NAME=%PROJECT_NAME%-v%VER%-src.zip"
 
 echo ========================================
-echo   %PROJECT_NAME% Ô´Âë´ò°ü
-echo   °æ±¾: !VER!
+echo   %PROJECT_NAME% æºç æ‰“åŒ…
+echo   ç‰ˆæœ¬: %VER%
 echo ========================================
 echo.
 
-if exist "!ZIP_NAME!" del /f /q "!ZIP_NAME!"
+if exist "%ZIP_NAME%" del /f /q "%ZIP_NAME%"
 
-echo [´ò°ü] ÕýÔÚÉú³É !ZIP_NAME! ...
+echo [æ‰“åŒ…] æ­£åœ¨ç”Ÿæˆ %ZIP_NAME% ...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path @('app', 'gradle', '.github', 'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat', 'README.md', 'AndroidÖÇÄÜ±àÒë½Å±¾_v2.0.bat', '´ò°üÔ´Âë.bat') -DestinationPath '!ZIP_NAME!' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path @('app', 'gradle', '.github', 'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat', 'README.md', 'Androidæ™ºèƒ½ç¼–è¯‘è„šæœ¬_v2.0.bat', 'æ‰“åŒ…æºç .bat') -DestinationPath '%ZIP_NAME%' -Force"
 
-if exist "!ZIP_NAME!" (
-    for %%F in ("!ZIP_NAME!") do set "FSIZE=%%~zF"
-    echo [³É¹¦] Ô´Âë°üÒÑÉú³É: !ZIP_NAME!
-    echo        ´óÐ¡: !FSIZE! bytes
+if exist "%ZIP_NAME%" (
+    for %%F in ("%ZIP_NAME%") do set "FSIZE=%%~zF"
+    echo [æˆåŠŸ] æºç åŒ…å·²ç”Ÿæˆ: %ZIP_NAME%
+    echo        å¤§å°: %FSIZE% bytes
 ) else (
-    echo [´íÎó] ´ò°üÊ§°Ü
+    echo [é”™è¯¯] æ‰“åŒ…å¤±è´¥
 )
 
 echo.
-echo °´ÈÎÒâ¼üÍË³ö...
-pause >/dev/null
+echo æŒ‰ä»»æ„é”®é€€å‡º...
+pause >nul
