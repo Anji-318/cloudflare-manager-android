@@ -25,11 +25,34 @@ set "ZIP_NAME=%PROJECT_NAME%-v!VER!-src.zip"
 if exist "!ZIP_NAME!" del /f /q "!ZIP_NAME!"
 
 echo [打包] 正在生成 !ZIP_NAME! ...
-echo   包含: app/src, build.gradle.kts, settings.gradle.kts, gradle.properties, gradle/wrapper, README.md
 echo.
 
-set "PS_ZIP=!ZIP_NAME!"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& {Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = '%PS_ZIP%'; $sw = [System.IO.Compression.ZipFile]::Open($zip, 'Create'); $baseLen = (Get-Location).Path.Length + 1; $entries = @(); function Add-Files($path, $exclude) { $items = Get-ChildItem $path; foreach ($item in $items) { $skip = $false; foreach ($e in $exclude) { if ($item.Name -like $e) { $skip = $true; break } } if ($skip) { continue }; $rel = $item.FullName.Substring($baseLen).Replace('\', '/'); if ($item.PSIsContainer) { Add-Files $item.FullName $exclude } else { $entries += $rel; $sw.CreateEntryFromFile($item.FullName, $rel, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null } } }; Add-Files 'app' @('build', '.externalNativeBuild', '.cxx', 'release'); Add-Files 'gradle' @(); $files = @('build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat', 'README.md'); foreach ($f in $files) { if (Test-Path $f) { $sw.CreateEntryFromFile($f, (Split-Path $f -Leaf), [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null } }; $sw.Dispose(); $size = (Get-Item $zip).Length; Write-Host ('[成功] 源码包已生成: ' + $zip); Write-Host ('       大小: ' + [math]::Round($size/1KB, 2) + ' KB')}"
+:: 创建临时目录，只复制需要的文件
+set "TMP_DIR=%TEMP%\src_pkg_%RANDOM%"
+mkdir "%TMP_DIR%\app\src" >nul 2>&1
+mkdir "%TMP_DIR%\gradle\wrapper" >nul 2>&1
+xcopy /E /I /Q "app\src" "%TMP_DIR%\app\src" >nul 2>&1
+copy /Y "app\build.gradle.kts" "%TMP_DIR%\app\" >nul 2>&1
+copy /Y "app\proguard-rules.pro" "%TMP_DIR%\app\" >nul 2>&1
+xcopy /E /I /Q "gradle\wrapper" "%TMP_DIR%\gradle\wrapper" >nul 2>&1
+copy /Y "gradle.properties" "%TMP_DIR%\" >nul 2>&1
+copy /Y "build.gradle.kts" "%TMP_DIR%\" >nul 2>&1
+copy /Y "settings.gradle.kts" "%TMP_DIR%\" >nul 2>&1
+copy /Y "gradlew" "%TMP_DIR%\" >nul 2>&1
+copy /Y "gradlew.bat" "%TMP_DIR%\" >nul 2>&1
+copy /Y "README.md" "%TMP_DIR%\" >nul 2>&1
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%TMP_DIR%\*' -DestinationPath '!ZIP_NAME!' -Force"
+
+rmdir /S /Q "%TMP_DIR%" >nul 2>&1
+
+if exist "!ZIP_NAME!" (
+    for %%F in ("!ZIP_NAME!") do set "FSIZE=%%~zF"
+    echo [成功] 源码包已生成: !ZIP_NAME!
+    echo        大小: !FSIZE! bytes
+) else (
+    echo [错误] 打包失败
+)
 
 echo.
 echo 按任意键退出...
