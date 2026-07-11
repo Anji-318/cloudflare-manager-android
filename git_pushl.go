@@ -3,16 +3,32 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
+	"time"
+	"unicode/utf8"
 
+	"github.com/eiannone/keyboard"
 	"golang.org/x/term"
 )
 
-// 仓库地址从 git-config.txt 的 REPO_URL 读取，未配置时提示输入
+// ========== 颜色常量 ==========
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorMagenta = "\033[35m"
+	ColorCyan   = "\033[36m"
+	ColorWhite  = "\033[37m"
+	ColorBold   = "\033[1m"
+)
 
 var (
 	projectDir     string
@@ -26,12 +42,90 @@ var (
 	githubToken    string
 )
 
+// ========== 随机颜色 ==========
+func randomColor() string {
+	colors := []string{
+		ColorRed, ColorGreen, ColorYellow, ColorBlue, ColorMagenta, ColorCyan,
+	}
+	return colors[rand.Intn(len(colors))]
+}
+
+// ========== 计算字符串显示宽度（支持中文/emoji双宽） ==========
+func getStringDisplayWidth(s string) int {
+	width := 0
+	for _, r := range s {
+		if utf8.RuneLen(r) > 1 {
+			width += 2
+		} else {
+			width += 1
+		}
+	}
+	return width
+}
+
+// ========== 移除ANSI颜色代码 ==========
+func removeColorCodes(s string) string {
+	re := regexp.MustCompile("\033\\[[0-9;]*m")
+	return re.ReplaceAllString(s, "")
+}
+
+// ========== 居中打印文本 ==========
+func printCentered(text string, termWidth int) {
+	clean := removeColorCodes(text)
+	w := getStringDisplayWidth(clean)
+	if w >= termWidth {
+		fmt.Println(text)
+		return
+	}
+	padding := (termWidth - w) / 2
+	fmt.Println(strings.Repeat(" ", padding) + text)
+}
+
+// ========== 获取终端宽度 ==========
+func getTerminalWidth() int {
+	width := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		width = w
+	}
+	return width
+}
+
+// ========== 清屏并显示标题 ==========
+func clearScreenAndShowBanner(termWidth int, bannerColor string) {
+	// ANSI清屏
+	fmt.Print("\033[2J\033[H")
+	
+	// 艺术字
+	lines := []string{
+		"██████╗ ██╗████████╗    ██████╗ ██╗   ██╗███████╗██╗  ██╗",
+		"██╔════╝ ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝██║ ██╔╝",
+		"██║  ███╗██║   ██║       ██████╔╝██║   ██║███████╗█████╔╝ ",
+		"██║   ██║██║   ██║       ██╔═══╝ ██║   ██║╚════██║██╔═██╗ ",
+		"╚██████╔╝██║   ██║       ██║     ╚██████╔╝███████║██║  ██╗",
+		" ╚═════╝ ╚═╝   ╚═╝       ╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═╝",
+	}
+	for _, line := range lines {
+		printCentered(bannerColor+line+ColorReset, termWidth)
+	}
+	fmt.Println()
+}
+
+// ========== 菜单选项结构 ==========
+type menuOption struct {
+	key   string
+	text  string
+	color string
+}
+
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	originalDir, _ = os.Getwd()
+	termWidth := getTerminalWidth()
 
 	// 查找 .git 目录
 	projectDir = findGitRepo(originalDir)
 	if projectDir == "" {
+		clearScreenAndShowBanner(termWidth, ColorCyan)
 		fmt.Println("[信息] 未找到 Git 仓库")
 		if !confirm("是否在此目录初始化新仓库") {
 			fmt.Println("[退出]")
@@ -52,18 +146,13 @@ func main() {
 	}
 
 	// 检测远程仓库
-	fmt.Println("[调试] 当前 git remote 配置:")
 	remotes := runGit("remote")
 	if remotes == "" {
-		fmt.Println("[警告] git remote 未配置")
 		remoteName = "origin"
-		// 先读取配置
 		configFile = filepath.Join(projectDir, "git-config.txt")
 		readConfig()
-		// 如果配置中也没有地址，提示输入
 		if remoteURL == "" {
-			fmt.Println("[提示] 未配置仓库地址，请手动输入")
-			fmt.Print("[输入] 请输入仓库地址 (如 https://github.com/用户名/仓库.git): ")
+			fmt.Print("[输入] 请输入仓库地址: ")
 			remoteURL = readLine()
 			if remoteURL == "" {
 				fmt.Println("[错误] 仓库地址不能为空")
@@ -75,29 +164,22 @@ func main() {
 	} else {
 		remoteName = strings.Split(remotes, "\n")[0]
 		remoteURL = strings.TrimSpace(runGit("remote", "get-url", remoteName))
-		fmt.Println("[信息] 使用远程:", remoteName)
 	}
 
-	// 修复 URL（Go 字符串替换，绝对安全）
+	// 修复 URL
 	remoteURL = strings.ReplaceAll(remoteURL, "github.comAnji-318", "github.com/Anji-318")
-	// 同时处理其他可能的格式错误
 	remoteURL = strings.ReplaceAll(remoteURL, "github.com//", "github.com/")
-	// 确保协议头正确
 	if !strings.HasPrefix(remoteURL, "http://") && !strings.HasPrefix(remoteURL, "https://") {
 		remoteURL = "https://" + remoteURL
 	}
 
-	fmt.Println("[仓库]", remoteURL)
-	fmt.Println("[分支]", currentBranch)
-
-	// 读取认证信息（如果上面已经读取过则跳过）
+	// 读取认证信息
 	if configFile == "" {
 		configFile = filepath.Join(projectDir, "git-config.txt")
 		readConfig()
 	}
 
 	if githubUsername == "" {
-		fmt.Println()
 		fmt.Print("[输入] 请输入 GitHub 用户名: ")
 		githubUsername = readLine()
 	}
@@ -113,7 +195,7 @@ func main() {
 		return
 	}
 
-	// 先修复远程URL（去掉已有的认证信息，确保格式正确）
+	// 构建认证URL
 	cleanURL := remoteURL
 	if idx := strings.Index(cleanURL, "@"); idx != -1 {
 		cleanURL = cleanURL[idx+1:]
@@ -121,12 +203,9 @@ func main() {
 	if !strings.HasPrefix(cleanURL, "https://") && !strings.HasPrefix(cleanURL, "http://") {
 		cleanURL = "https://" + cleanURL
 	}
-	// 重新构建认证URL（buildAuthURL内部会再次处理，但这里确保传入的是干净的URL）
 	authURL = buildAuthURL(cleanURL, githubUsername, githubToken)
-	fmt.Println("[认证]", maskToken(authURL))
 
 	// 优化 Git 参数
-	fmt.Println("[配置] 优化 Git 推送参数...")
 	gitConfig("local", "http.postBuffer", "524288000")
 	gitConfig("local", "http.maxRequestBuffer", "524288000")
 	gitConfig("local", "http.lowSpeedLimit", "0")
@@ -134,203 +213,291 @@ func main() {
 	gitConfig("local", "core.compression", "9")
 	gitConfig("local", "pack.windowMemory", "256m")
 	gitConfig("local", "pack.packSizeLimit", "256m")
-	fmt.Println("[完成] 推送参数已优化")
 
-	// 主菜单循环
+	// 初始化键盘
+	if err := keyboard.Open(); err != nil {
+		fmt.Printf("%s[错误] 无法初始化键盘输入: %v%s\n", ColorRed, err, ColorReset)
+		fmt.Println("[提示] 将使用传统数字输入模式")
+		fallbackMenuLoop(termWidth)
+		return
+	}
+	defer keyboard.Close()
+
+	// 交互式菜单循环
+	interactiveMenuLoop(termWidth)
+}
+
+// ========== 交互式菜单（方向键+高亮） ==========
+func interactiveMenuLoop(termWidth int) {
+	options := []menuOption{
+		{"1", "普通推送", ColorGreen},
+		{"2", "强制覆盖推送", ColorRed},
+		{"3", "安全强制推送", ColorYellow},
+		{"4", "查看提交日志", ColorBlue},
+		{"5", "查看未提交更改", ColorCyan},
+		{"6", "测试连接", ColorGreen},
+		{"7", "清空配置登录信息", ColorRed},
+		{"8", "重写提交历史（屏蔽其他账户）", ColorMagenta},
+		{"9", "查看提交作者统计", ColorBlue},
+		{"A", "添加并提交更改", ColorGreen},
+		{"B", "拉取远程更改", ColorCyan},
+		{"C", "获取远程分支", ColorBlue},
+		{"D", "切换分支", ColorYellow},
+		{"E", "创建并切换新分支", ColorCyan},
+		{"F", "撤销上次提交", ColorRed},
+		{"G", "查看分支列表", ColorBlue},
+		{"H", "查看远程信息", ColorCyan},
+		{"I", "硬重置到远程", ColorRed},
+		{"J", "合并分支", ColorYellow},
+		{"K", "删除本地分支", ColorRed},
+		{"L", "从历史删除已跟踪的无关文件", ColorMagenta},
+		{"0", "退出", ColorRed},
+	}
+
+	selected := 0
+	bannerColor := randomColor()
+
 	for {
-		showMenu()
-		choice := readLine()
-		switch strings.ToUpper(choice) {
-		case "1":
-			normalPush()
-		case "2":
-			forcePush()
-		case "3":
-			forceLeasePush()
-		case "4":
-			showLog()
-		case "5":
-			showDiff()
-		case "6":
-			testConnection()
-		case "7":
-			clearToken()
-		case "8":
-			rewriteHistory()
-		case "9":
-			showAuthors()
-		case "A":
-			addCommit()
-		case "B":
-			pullRemote()
-		case "C":
-			fetchRemote()
-		case "D":
-			switchBranch()
-		case "E":
-			createBranch()
-		case "F":
-			undoCommit()
-		case "G":
-			showBranches()
-		case "H":
-			showRemoteInfo()
-		case "I":
-			hardReset()
-		case "J":
-			mergeBranch()
-		case "K":
-			deleteBranch()
-		case "L":
-			removeTrackedFiles()
-		case "0":
+		// 清屏 + 显示艺术字（随机颜色）
+		clearScreenAndShowBanner(termWidth, bannerColor)
+
+		// 显示信息栏
+		infoLine := fmt.Sprintf(" 用户: %s%s%s | 分支: %s%s%s | 远程: %s%s%s",
+			ColorCyan, githubUsername, ColorReset,
+			ColorYellow, currentBranch, ColorReset,
+			ColorGreen, remoteName, ColorReset)
+		fmt.Println(infoLine)
+		fmt.Println(strings.Repeat("─", termWidth))
+		fmt.Println()
+
+		// 显示菜单选项
+		for i, opt := range options {
+			if i == selected {
+				// 选中项：箭头 + 高亮 + 反色背景
+				fmt.Printf(" %s➤ %s[%s%s%s] %s%s%s\n",
+					ColorCyan, ColorReset,
+					ColorBold+opt.color, opt.key, ColorReset,
+					ColorBold+ColorWhite, opt.text, ColorReset)
+			} else {
+				// 未选中项
+				fmt.Printf("   %s[%s] %s%s\n",
+					opt.color, opt.key, opt.text, ColorReset)
+			}
+		}
+
+		fmt.Println()
+		fmt.Printf(" %s⬆/⬇ 方向键选择  |  数字/字母直接跳转  |  Enter执行  |  ESC退出%s\n", ColorYellow, ColorReset)
+
+		// 读取按键
+		char, key, err := keyboard.GetKey()
+		if err != nil {
+			continue
+		}
+
+		switch key {
+		case keyboard.KeyArrowUp:
+			selected--
+			if selected < 0 {
+				selected = len(options) - 1
+			}
+			// 选中变化时艺术字颜色联动变化
+			bannerColor = options[selected].color
+		case keyboard.KeyArrowDown:
+			selected++
+			if selected >= len(options) {
+				selected = 0
+			}
+			bannerColor = options[selected].color
+		case keyboard.KeyEnter:
+			executeOption(options[selected].key, termWidth)
+			if options[selected].key == "0" {
+				os.Chdir(originalDir)
+				return
+			}
+		case keyboard.KeyEsc:
 			os.Chdir(originalDir)
 			return
 		default:
-			fmt.Println("[错误] 无效选择")
-			sleep(1)
+			// 支持数字键 0-9 和字母键 A-L
+			upper := strings.ToUpper(string(char))
+			for i, opt := range options {
+				if opt.key == upper {
+					selected = i
+					bannerColor = opt.color
+					executeOption(opt.key, termWidth)
+					if opt.key == "0" {
+						os.Chdir(originalDir)
+						return
+					}
+					break
+				}
+			}
 		}
 	}
 }
 
-func showMenu() {
-	clearScreen()
-	fmt.Println("==========================================")
-	fmt.Println("           Git 推送工具 (Go版)")
-	fmt.Println("==========================================")
-	fmt.Printf("  用户: %s\n", githubUsername)
-	fmt.Printf("  分支: %s\n", currentBranch)
-	fmt.Printf("  远程: %s\n", remoteName)
-	fmt.Printf("  仓库: %s\n", remoteURL)
-	fmt.Printf("  目录: %s\n", projectDir)
-	fmt.Println("==========================================")
-	fmt.Println()
-	fmt.Println("  [1] 普通推送  (git push)")
-	fmt.Println("  [2] 强制覆盖推送 (git push --force)")
-	fmt.Println("  [3] 安全强制推送 (git push --force-with-lease)")
-	fmt.Println("  [4] 查看提交日志")
-	fmt.Println("  [5] 查看未提交更改")
-	fmt.Println("  [6] 测试连接")
-	fmt.Println("  [7] 清空配置登录信息")
-	fmt.Println("  [8] 重写提交历史（屏蔽其他账户）")
-	fmt.Println("  [9] 查看提交作者统计")
-	fmt.Println("  [A] 添加并提交更改 (git add + commit)")
-	fmt.Println("  [B] 拉取远程更改 (git pull)")
-	fmt.Println("  [C] 获取远程分支 (git fetch)")
-	fmt.Println("  [D] 切换分支 (git checkout)")
-	fmt.Println("  [E] 创建并切换新分支 (git checkout -b)")
-	fmt.Println("  [F] 撤销上次提交 (git reset --soft HEAD~1)")
-	fmt.Println("  [G] 查看分支列表")
-	fmt.Println("  [H] 查看远程信息")
-	fmt.Println("  [I] 硬重置到远程 (git reset --hard)")
-	fmt.Println("  [J] 合并分支 (git merge)")
-	fmt.Println("  [K] 删除本地分支 (git branch -D)")
-	fmt.Println("  [L] 从历史中删除已跟踪的无关文件")
-	fmt.Println("  [0] 退出")
-	fmt.Println()
-	fmt.Println("==========================================")
-	fmt.Print("请选择操作 [0-9,A-L]: ")
+// ========== 回退菜单（无键盘库支持时使用） ==========
+func fallbackMenuLoop(termWidth int) {
+	for {
+		clearScreenAndShowBanner(termWidth, ColorCyan)
+		fmt.Printf(" 用户: %s | 分支: %s | 远程: %s\n", githubUsername, currentBranch, remoteName)
+		fmt.Println(strings.Repeat("─", termWidth))
+		fmt.Println()
+		fmt.Println("  [1] 普通推送    [2] 强制覆盖推送  [3] 安全强制推送")
+		fmt.Println("  [4] 查看日志    [5] 查看更改      [6] 测试连接")
+		fmt.Println("  [7] 清空配置    [8] 重写历史      [9] 作者统计")
+		fmt.Println("  [A] 添加提交    [B] 拉取远程      [C] 获取分支")
+		fmt.Println("  [D] 切换分支    [E] 创建分支      [F] 撤销提交")
+		fmt.Println("  [G] 分支列表    [H] 远程信息      [I] 硬重置")
+		fmt.Println("  [J] 合并分支    [K] 删除分支      [L] 删除无关文件")
+		fmt.Println("  [0] 退出")
+		fmt.Println()
+		fmt.Print(" 请选择 [0-9,A-L]: ")
+		choice := strings.ToUpper(readLine())
+		if choice == "0" {
+			os.Chdir(originalDir)
+			return
+		}
+		executeOption(choice, termWidth)
+	}
 }
 
-// ==================== 核心功能 ====================
+// ========== 执行选项 ==========
+func executeOption(choice string, termWidth int) {
+	// 清屏显示执行中
+	fmt.Print("\033[2J\033[H")
+	clearScreenAndShowBanner(termWidth, ColorGreen)
+
+	switch choice {
+	case "1":
+		normalPush()
+	case "2":
+		forcePush()
+	case "3":
+		forceLeasePush()
+	case "4":
+		showLog()
+	case "5":
+		showDiff()
+	case "6":
+		testConnection()
+	case "7":
+		clearToken()
+	case "8":
+		rewriteHistory()
+	case "9":
+		showAuthors()
+	case "A":
+		addCommit()
+	case "B":
+		pullRemote()
+	case "C":
+		fetchRemote()
+	case "D":
+		switchBranch()
+	case "E":
+		createBranch()
+	case "F":
+		undoCommit()
+	case "G":
+		showBranches()
+	case "H":
+		showRemoteInfo()
+	case "I":
+		hardReset()
+	case "J":
+		mergeBranch()
+	case "K":
+		deleteBranch()
+	case "L":
+		removeTrackedFiles()
+	default:
+		fmt.Println("[错误] 无效选择")
+	}
+
+	if choice != "0" {
+		fmt.Println()
+		fmt.Printf("%s按任意键返回菜单...%s", ColorYellow, ColorReset)
+		keyboard.GetKey()
+	}
+}
+
+// ========== 原有功能函数（保持不变） ==========
 
 func normalPush() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("           普通推送")
 	fmt.Println("==========================================")
 	fmt.Println()
-
 	if hasUncommittedChanges() {
 		fmt.Println("[警告] 检测到未提交的更改！")
-		fmt.Println()
 		runGitShow("status", "--short")
 		fmt.Println()
 		if !confirm("是否继续推送已提交的更改") {
 			return
 		}
 	}
-
 	fmt.Printf("[执行] git push %s %s ...\n", remoteName, currentBranch)
 	out, err := runGitOutput("push", authURL, currentBranch)
 	if err != nil {
-		fmt.Println()
 		fmt.Println("[失败] 推送被拒绝")
-		fmt.Println("[提示] 如果提示 403，请检查 Token 是否有 repo 权限")
 		fmt.Println(out)
 	} else {
-		fmt.Println()
 		fmt.Println("[成功] 推送完成！")
 	}
-	pause()
 }
 
 func forcePush() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        强制覆盖推送")
 	fmt.Println("==========================================")
 	fmt.Println()
 	fmt.Println("[警告] 此操作会覆盖远程历史！")
 	fmt.Println()
-
 	fmt.Println("[信息] 本地提交:")
 	runGitShow("log", "--oneline", "-5")
 	fmt.Println()
 	fmt.Println("[信息] 远程提交:")
 	showRemoteLog(5)
-
 	fmt.Println()
 	if !confirm("确认强制覆盖远程仓库") {
 		return
 	}
-
 	fmt.Println()
 	fmt.Printf("[执行] git push --force %s %s ...\n", remoteName, currentBranch)
 	out, err := runGitOutput("push", "--force", authURL, currentBranch)
 	if err != nil {
-		fmt.Println()
 		fmt.Println("[失败] 强制推送失败")
 		fmt.Println(out)
 	} else {
-		fmt.Println()
 		fmt.Println("[成功] 强制推送完成！")
 	}
-	pause()
 }
 
 func forceLeasePush() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        安全强制推送")
 	fmt.Println("==========================================")
 	fmt.Println()
 	fmt.Println("[说明] 仅当远程没有新提交时才会强制推送")
 	fmt.Println()
-
 	fmt.Println("[信息] 本地 vs 远程差异:")
 	showRemoteDiff()
-
 	fmt.Println()
 	if !confirm("确认安全强制推送") {
 		return
 	}
-
 	fmt.Println()
 	out, err := runGitOutput("push", "--force-with-lease", authURL, currentBranch)
 	if err != nil {
-		fmt.Println()
 		fmt.Println("[失败] 推送被拒绝！远程可能有新提交")
 		fmt.Println(out)
 	} else {
-		fmt.Println()
 		fmt.Println("[成功] 安全强制推送完成！")
 	}
-	pause()
 }
 
 func showLog() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("           提交日志")
 	fmt.Println("==========================================")
@@ -341,11 +508,9 @@ func showLog() {
 	fmt.Println("[远程提交] (最近5条):")
 	showRemoteLog(5)
 	fmt.Println()
-	pause()
 }
 
 func showDiff() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("           未提交更改")
 	fmt.Println("==========================================")
@@ -355,11 +520,9 @@ func showDiff() {
 	fmt.Println("==========================================")
 	runGitShow("diff", "--stat")
 	fmt.Println()
-	pause()
 }
 
 func testConnection() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("           测试连接")
 	fmt.Println("==========================================")
@@ -368,7 +531,6 @@ func testConnection() {
 	maskedURL := maskToken(authURL)
 	fmt.Println("[URL]", maskedURL)
 	fmt.Println()
-
 	_, err := runGitOutput("ls-remote", "--heads", authURL, currentBranch)
 	if err != nil {
 		fmt.Println("[失败] 连接失败！请检查:")
@@ -380,11 +542,9 @@ func testConnection() {
 		fmt.Println("[信息] 远程分支存在，可以推送")
 	}
 	fmt.Println()
-	pause()
 }
 
 func clearToken() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        清空配置登录信息")
 	fmt.Println("==========================================")
@@ -399,18 +559,15 @@ func clearToken() {
 	} else {
 		fmt.Println("[提示] 未找到 git-config.txt，无需清空")
 	}
-	pause()
 }
 
 func showAuthors() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        提交作者统计")
 	fmt.Println("==========================================")
 	fmt.Println()
 	fmt.Println("[信息] 当前仓库所有提交的作者统计：")
 	fmt.Println()
-
 	out := runGit("log", "--format=%an <%ae>")
 	lines := strings.Split(out, "\n")
 	counts := make(map[string]int)
@@ -420,20 +577,15 @@ func showAuthors() {
 			counts[line]++
 		}
 	}
-
-	// 简单排序输出
 	for author, count := range counts {
 		fmt.Printf("  %4d  %s\n", count, author)
 	}
-
 	fmt.Println()
 	fmt.Println("[提示] 上方列出的是所有提交过的作者")
 	fmt.Println("[提示] 选择 [8] 可以重写历史")
-	pause()
 }
 
 func rewriteHistory() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("     重写提交历史（屏蔽其他账户）")
 	fmt.Println("==========================================")
@@ -441,11 +593,9 @@ func rewriteHistory() {
 	fmt.Println("[警告] 此操作会重写所有 commit 的 hash 值！")
 	fmt.Println("[警告] 远程仓库的历史将被完全替换！")
 	fmt.Println()
-
 	fmt.Println("[当前提交作者统计]:")
 	showAuthorsSimple()
 	fmt.Println()
-
 	fmt.Println("[步骤 1/4] 输入要屏蔽的作者信息")
 	fmt.Println()
 	fmt.Println("[提示] 上方列表中显示的即为所有提交作者")
@@ -453,14 +603,10 @@ func rewriteHistory() {
 	oldAuthor := readLine()
 	fmt.Print("要屏蔽的作者邮箱 (如 1173287796@qq.com): ")
 	oldEmail := readLine()
-
 	if oldAuthor == "" {
 		fmt.Println("[错误] 作者名不能为空")
-		pause()
 		return
 	}
-
-	// 默认值
 	defaultAuthor := githubUsername
 	defaultEmail := runGit("config", "user.email")
 	if defaultEmail == "" {
@@ -469,11 +615,6 @@ func rewriteHistory() {
 	if defaultAuthor == "" {
 		defaultAuthor = defaultEmail
 	}
-
-	clearScreen()
-	fmt.Println("==========================================")
-	fmt.Println("     重写提交历史（屏蔽其他账户）")
-	fmt.Println("==========================================")
 	fmt.Println()
 	fmt.Println("[步骤 2/4] 输入新的作者信息")
 	fmt.Println()
@@ -488,11 +629,9 @@ func rewriteHistory() {
 	newAuthor := readLine()
 	fmt.Printf("新作者邮箱 [直接回车=%s]: ", defaultEmail)
 	newEmail := readLine()
-
 	if newAuthor == "" {
 		if defaultAuthor == "" {
 			fmt.Println("[错误] 新作者名不能为空")
-			pause()
 			return
 		}
 		newAuthor = defaultAuthor
@@ -500,16 +639,10 @@ func rewriteHistory() {
 	if newEmail == "" {
 		if defaultEmail == "" {
 			fmt.Println("[错误] 新作者邮箱不能为空")
-			pause()
 			return
 		}
 		newEmail = defaultEmail
 	}
-
-	clearScreen()
-	fmt.Println("==========================================")
-	fmt.Println("     重写提交历史（屏蔽其他账户）")
-	fmt.Println("==========================================")
 	fmt.Println()
 	fmt.Println("[步骤 3/4] 确认替换信息")
 	fmt.Println()
@@ -522,24 +655,18 @@ func rewriteHistory() {
 	if !confirm("确认执行替换") {
 		return
 	}
-
-	clearScreen()
+	fmt.Println()
 	fmt.Println("[步骤 4/4] 正在执行替换...")
 	fmt.Println()
-
 	fmt.Println("[备份] 创建备份分支 rewrite-backup ...")
 	runGit("branch", "rewrite-backup")
 	fmt.Println("[完成] 备份分支已创建")
 	fmt.Println()
-
-	// 使用 git filter-branch（所有Git自带，无需额外安装）
 	fmt.Println("[执行] git filter-branch 替换作者信息...")
 	fmt.Println("[提示] 这可能需要一些时间，请耐心等待...")
 	fmt.Println()
-
 	var envFilter string
 	if oldEmail == "" {
-		// 只按作者名匹配
 		envFilter = fmt.Sprintf(`
 if [ "$GIT_AUTHOR_NAME" = "%s" ]; then
 	export GIT_AUTHOR_NAME="%s"
@@ -548,7 +675,6 @@ if [ "$GIT_AUTHOR_NAME" = "%s" ]; then
 	export GIT_COMMITTER_EMAIL="%s"
 fi`, oldAuthor, newAuthor, newEmail, newAuthor, newEmail)
 	} else {
-		// 按作者名或邮箱匹配
 		envFilter = fmt.Sprintf(`
 if [ "$GIT_AUTHOR_NAME" = "%s" ] || [ "$GIT_AUTHOR_EMAIL" = "%s" ]; then
 	export GIT_AUTHOR_NAME="%s"
@@ -557,21 +683,17 @@ if [ "$GIT_AUTHOR_NAME" = "%s" ] || [ "$GIT_AUTHOR_EMAIL" = "%s" ]; then
 	export GIT_COMMITTER_EMAIL="%s"
 fi`, oldAuthor, oldEmail, newAuthor, newEmail, newAuthor, newEmail)
 	}
-
 	cmd := exec.Command("git", "filter-branch", "--env-filter", envFilter, "--force", "HEAD")
 	cmd.Dir = projectDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
-
 	if err != nil {
 		fmt.Println()
 		fmt.Println("[失败] git filter-branch 执行失败！")
 		fmt.Println("[恢复] 可以从备份分支恢复: git checkout rewrite-backup")
-		pause()
 		return
 	}
-
 	fmt.Println()
 	fmt.Println("[成功] 作者信息替换完成！")
 	fmt.Println()
@@ -580,175 +702,9 @@ fi`, oldAuthor, oldEmail, newAuthor, newEmail, newAuthor, newEmail)
 	fmt.Println()
 	fmt.Println("[下一步] 请选择 [2] 强制覆盖推送")
 	fmt.Println("[提示] GitHub 会在几小时内更新 Contributors 列表")
-	pause()
 }
-
-// ==================== 新增功能：从历史中删除已跟踪的无关文件 ====================
-
-func removeTrackedFiles() {
-	clearScreen()
-	fmt.Println("==========================================")
-	fmt.Println("     从历史中删除已跟踪的无关文件")
-	fmt.Println("==========================================")
-	fmt.Println()
-	fmt.Println("[警告] 此操作会重写所有 commit 的 hash 值！")
-	fmt.Println("[警告] 远程仓库的历史将被完全替换！")
-	fmt.Println()
-	fmt.Println("[说明] .gitignore 只能忽略未跟踪的新文件")
-	fmt.Println("[说明] 对于已错误提交的文件，需要重写历史才能彻底删除")
-	fmt.Println()
-
-	// 扫描已跟踪的常见问题文件
-	fmt.Println("[扫描] 检测已跟踪的常见问题文件...")
-	fmt.Println()
-
-	trackedFiles := scanTrackedFiles()
-	if len(trackedFiles) == 0 {
-		fmt.Println("[信息] 未发现已跟踪的无关文件，.gitignore 工作正常")
-		pause()
-		return
-	}
-
-	fmt.Println("[发现] 以下文件已跟踪（会被提交到仓库）：")
-	fmt.Println()
-	for _, f := range trackedFiles {
-		fmt.Printf("  - %s\n", f)
-	}
-	fmt.Println()
-
-	if !confirm("是否删除这些文件（重写历史）") {
-		return
-	}
-
-	// 构建删除模式（按扩展名分组）
-	patterns := buildDeletePatterns(trackedFiles)
-
-	clearScreen()
-	fmt.Println("[步骤 1/3] 创建备份...")
-	runGit("branch", "delete-files-backup")
-	fmt.Println("[完成] 备份分支 delete-files-backup 已创建")
-	fmt.Println()
-
-	fmt.Println("[步骤 2/3] 执行 git filter-branch 删除文件...")
-	fmt.Println("[提示] 这可能需要一些时间，请耐心等待...")
-	fmt.Println()
-
-	// 构建 index-filter 命令
-	var rmCmd string
-	if len(patterns) == 1 {
-		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", patterns[0])
-	} else {
-		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", strings.Join(patterns, " "))
-	}
-
-	cmd := exec.Command("git", "filter-branch", "--force", "--index-filter", rmCmd, "--prune-empty", "--", "HEAD")
-	cmd.Dir = projectDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-
-	if err != nil {
-		fmt.Println()
-		fmt.Println("[失败] 删除失败！")
-		fmt.Println("[恢复] 可以从备份分支恢复: git checkout delete-files-backup")
-		pause()
-		return
-	}
-
-	fmt.Println()
-	fmt.Println("[步骤 3/3] 验证结果...")
-	fmt.Println()
-
-	// 重新扫描验证
-	remaining := scanTrackedFiles()
-	if len(remaining) == 0 {
-		fmt.Println("[成功] 所有无关文件已从历史中彻底删除！")
-		fmt.Println()
-		fmt.Println("[下一步] 请选择 [2] 强制覆盖推送")
-	} else {
-		fmt.Println("[警告] 以下文件仍存在于历史中：")
-		for _, f := range remaining {
-			fmt.Printf("  - %s\n", f)
-		}
-		fmt.Println()
-		fmt.Println("[提示] 可能需要手动指定文件名删除")
-	}
-
-	fmt.Println()
-	fmt.Println("[提示] 本地文件仍然保留，只是从 Git 历史中移除")
-	pause()
-}
-
-// 扫描已跟踪的常见问题文件
-func scanTrackedFiles() []string {
-	var result []string
-
-	// 常见需要忽略的文件模式
-	patterns := []string{
-		"*.exe", "*.dll", "*.so", "*.dylib",
-		"*.zip", "*.tar.gz", "*.tar", "*.rar", "*.7z",
-		"*.apk", "*.aab", "*.ap_",
-		"*.ipa",
-		"*.jks", "*.keystore",
-		"token.txt", "git-config.txt",
-		"release-key.jks", "release-key.txt",
-	}
-
-	for _, pattern := range patterns {
-		out := runGit("ls-files", pattern)
-		if out != "" {
-			lines := strings.Split(out, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					result = append(result, line)
-				}
-			}
-		}
-	}
-
-	// 去重
-	seen := make(map[string]bool)
-	var unique []string
-	for _, f := range result {
-		if !seen[f] {
-			seen[f] = true
-			unique = append(unique, f)
-		}
-	}
-
-	return unique
-}
-
-// 构建删除模式（合并相同扩展名）
-func buildDeletePatterns(files []string) []string {
-	// 按扩展名分组
-	extMap := make(map[string]bool)
-	var singles []string
-
-	for _, f := range files {
-		ext := filepath.Ext(f)
-		if ext != "" {
-			extMap["*"+ext] = true
-		} else {
-			// 无扩展名的单独文件
-			singles = append(singles, f)
-		}
-	}
-
-	var patterns []string
-	for p := range extMap {
-		patterns = append(patterns, p)
-	}
-	patterns = append(patterns, singles...)
-
-	return patterns
-}
-
-// ==================== 新增功能 ====================
 
 func addCommit() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        添加并提交更改")
 	fmt.Println("==========================================")
@@ -761,7 +717,6 @@ func addCommit() {
 	if msg == "" {
 		msg = "Update"
 	}
-
 	fmt.Println("[执行] git add -A ...")
 	runGit("add", "-A")
 	fmt.Printf("[执行] git commit -m \"%s\" ...\n", msg)
@@ -771,11 +726,9 @@ func addCommit() {
 	} else {
 		fmt.Println("[成功] 提交完成！")
 	}
-	pause()
 }
 
 func pullRemote() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        拉取远程更改")
 	fmt.Println("==========================================")
@@ -783,19 +736,15 @@ func pullRemote() {
 	fmt.Printf("[执行] git pull %s %s ...\n", remoteName, currentBranch)
 	out, err := runGitOutput("pull", authURL, currentBranch)
 	if err != nil {
-		fmt.Println()
 		fmt.Println("[失败] 拉取失败")
 		fmt.Println("[提示] 可能存在冲突，请手动解决")
 		fmt.Println(out)
 	} else {
-		fmt.Println()
 		fmt.Println("[成功] 拉取完成！")
 	}
-	pause()
 }
 
 func fetchRemote() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        获取远程分支")
 	fmt.Println("==========================================")
@@ -811,11 +760,9 @@ func fetchRemote() {
 		fmt.Println("[远程分支列表]:")
 		runGitShow("branch", "-r")
 	}
-	pause()
 }
 
 func switchBranch() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        切换分支")
 	fmt.Println("==========================================")
@@ -828,7 +775,6 @@ func switchBranch() {
 	if branch == "" {
 		return
 	}
-
 	_, err := runGitOutput("checkout", branch)
 	if err != nil {
 		fmt.Println("[失败] 切换失败")
@@ -836,11 +782,9 @@ func switchBranch() {
 		currentBranch = strings.TrimSpace(runGit("branch", "--show-current"))
 		fmt.Println("[成功] 已切换到分支:", currentBranch)
 	}
-	pause()
 }
 
 func createBranch() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        创建并切换新分支")
 	fmt.Println("==========================================")
@@ -850,7 +794,6 @@ func createBranch() {
 	if branch == "" {
 		return
 	}
-
 	_, err := runGitOutput("checkout", "-b", branch)
 	if err != nil {
 		fmt.Println("[失败] 创建失败")
@@ -858,11 +801,9 @@ func createBranch() {
 		currentBranch = strings.TrimSpace(runGit("branch", "--show-current"))
 		fmt.Println("[成功] 已创建并切换到:", currentBranch)
 	}
-	pause()
 }
 
 func undoCommit() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        撤销上次提交")
 	fmt.Println("==========================================")
@@ -875,18 +816,15 @@ func undoCommit() {
 	if !confirm("确认撤销上次提交") {
 		return
 	}
-
 	_, err := runGitOutput("reset", "--soft", "HEAD~1")
 	if err != nil {
 		fmt.Println("[失败]")
 	} else {
 		fmt.Println("[成功] 上次提交已撤销，更改保留在暂存区")
 	}
-	pause()
 }
 
 func showBranches() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        分支列表")
 	fmt.Println("==========================================")
@@ -898,11 +836,9 @@ func showBranches() {
 	runGitShow("branch", "-r", "-v")
 	fmt.Println()
 	fmt.Println("[当前分支]:", currentBranch)
-	pause()
 }
 
 func showRemoteInfo() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        远程仓库信息")
 	fmt.Println("==========================================")
@@ -915,11 +851,9 @@ func showRemoteInfo() {
 	} else {
 		fmt.Println(out)
 	}
-	pause()
 }
 
 func hardReset() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        硬重置到远程版本")
 	fmt.Println("==========================================")
@@ -930,7 +864,6 @@ func hardReset() {
 	if !confirm(fmt.Sprintf("确认硬重置到远程 %s/%s", remoteName, currentBranch)) {
 		return
 	}
-
 	runGit("fetch", authURL, currentBranch)
 	_, err := runGitOutput("reset", "--hard", remoteName+"/"+currentBranch)
 	if err != nil {
@@ -938,11 +871,9 @@ func hardReset() {
 	} else {
 		fmt.Println("[成功] 本地已重置为远程版本！")
 	}
-	pause()
 }
 
 func mergeBranch() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        合并分支")
 	fmt.Println("==========================================")
@@ -956,7 +887,6 @@ func mergeBranch() {
 	if branch == "" {
 		return
 	}
-
 	_, err := runGitOutput("merge", branch)
 	if err != nil {
 		fmt.Println()
@@ -964,11 +894,9 @@ func mergeBranch() {
 	} else {
 		fmt.Println("[成功] 合并完成！")
 	}
-	pause()
 }
 
 func deleteBranch() {
-	clearScreen()
 	fmt.Println("==========================================")
 	fmt.Println("        删除本地分支")
 	fmt.Println("==========================================")
@@ -983,24 +911,80 @@ func deleteBranch() {
 	}
 	if strings.EqualFold(branch, currentBranch) {
 		fmt.Println("[错误] 不能删除当前所在分支！")
-		pause()
 		return
 	}
-
 	if !confirm(fmt.Sprintf("确认删除分支 %s", branch)) {
 		return
 	}
-
 	_, err := runGitOutput("branch", "-D", branch)
 	if err != nil {
 		fmt.Println("[失败] 删除失败")
 	} else {
 		fmt.Println("[成功] 分支已删除")
 	}
-	pause()
 }
 
-// ==================== 辅助函数 ====================
+func removeTrackedFiles() {
+	fmt.Println("==========================================")
+	fmt.Println("     从历史中删除已跟踪的无关文件")
+	fmt.Println("==========================================")
+	fmt.Println()
+	fmt.Println("[警告] 此操作会重写所有 commit 的 hash 值！")
+	fmt.Println("[警告] 远程仓库的历史将被完全替换！")
+	fmt.Println()
+	fmt.Println("[说明] .gitignore 只能忽略未跟踪的新文件")
+	fmt.Println("[说明] 对于已错误提交的文件，需要重写历史才能彻底删除")
+	fmt.Println()
+	fmt.Println("[扫描] 检测已跟踪的常见问题文件...")
+	fmt.Println()
+	trackedFiles := scanTrackedFiles()
+	if len(trackedFiles) == 0 {
+		fmt.Println("[信息] 未发现已跟踪的无关文件，.gitignore 工作正常")
+		return
+	}
+	fmt.Println("[发现] 以下文件已跟踪（会被提交到仓库）：")
+	fmt.Println()
+	for _, f := range trackedFiles {
+		fmt.Printf("  - %s\n", f)
+	}
+	fmt.Println()
+	if !confirm("是否删除这些文件（重写历史）") {
+		return
+	}
+	patterns := buildDeletePatterns(trackedFiles)
+	fmt.Println()
+	fmt.Println("[备份] 创建备份分支 delete-files-backup ...")
+	runGit("branch", "delete-files-backup")
+	fmt.Println("[完成] 备份分支已创建")
+	fmt.Println()
+	fmt.Println("[执行] git filter-branch 删除文件...")
+	fmt.Println("[提示] 这可能需要一些时间，请耐心等待...")
+	fmt.Println()
+	var rmCmd string
+	if len(patterns) == 1 {
+		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", patterns[0])
+	} else {
+		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", strings.Join(patterns, " "))
+	}
+	cmd := exec.Command("git", "filter-branch", "--force", "--index-filter", rmCmd, "--prune-empty", "--", "HEAD")
+	cmd.Dir = projectDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println()
+		fmt.Println("[失败] 删除失败！")
+		fmt.Println("[恢复] 可以从备份分支恢复: git checkout delete-files-backup")
+		return
+	}
+	fmt.Println()
+	fmt.Println("[成功] 所有无关文件已从历史中彻底删除！")
+	fmt.Println()
+	fmt.Println("[下一步] 请选择 [2] 强制覆盖推送")
+	fmt.Println("[提示] 本地文件仍然保留，只是从 Git 历史中移除")
+}
+
+// ========== 辅助函数 ==========
 
 func findGitRepo(start string) string {
 	dir := start
@@ -1022,17 +1006,14 @@ func initRepo() {
 	fmt.Println("           仓库初始化向导")
 	fmt.Println("==========================================")
 	fmt.Println()
-
 	fmt.Println("[执行] git init ...")
 	if err := runGitShow("init"); err != nil {
 		fmt.Println("[错误] git init 失败")
 		pause()
 		os.Exit(1)
 	}
-
 	projectDir, _ = os.Getwd()
 	fmt.Println("[信息] 仓库已初始化:", projectDir)
-
 	remoteName = "origin"
 	if remoteURL == "" {
 		fmt.Println("[错误] 未配置仓库地址，无法初始化")
@@ -1041,13 +1022,11 @@ func initRepo() {
 	}
 	fmt.Printf("[执行] git remote add %s %s ...\n", remoteName, remoteURL)
 	runGit("remote", "add", remoteName, remoteURL)
-
 	if _, err := os.Stat(".gitignore"); err != nil {
 		fmt.Println("[信息] 创建默认 .gitignore ...")
 		content := ".gradle/\n/local.properties\n/.idea/\n.DS_Store\n/build/\n/app/build/\n*.apk\n*.tar.gz\n*.zip\n*.bat\ntoken.txt\n"
 		os.WriteFile(".gitignore", []byte(content), 0644)
 	}
-
 	runGit("add", "-A")
 	_, err := runGitOutput("commit", "-m", "Initial commit")
 	if err != nil {
@@ -1055,7 +1034,6 @@ func initRepo() {
 	} else {
 		fmt.Println("[完成] 首次提交已创建")
 	}
-
 	fmt.Println("[信息] 仓库初始化完成")
 	pause()
 }
@@ -1066,7 +1044,6 @@ func readConfig() {
 		fmt.Println("[提示] 未找到 git-config.txt，将使用手动输入模式")
 		return
 	}
-
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -1084,10 +1061,8 @@ func readConfig() {
 }
 
 func buildAuthURL(url, username, token string) string {
-	// 只处理协议头，保留其余部分
 	url = strings.TrimPrefix(url, "https://")
 	url = strings.TrimPrefix(url, "http://")
-	// 去掉已有的认证信息（如果有 @）
 	if idx := strings.Index(url, "@"); idx != -1 {
 		url = url[idx+1:]
 	}
@@ -1095,7 +1070,6 @@ func buildAuthURL(url, username, token string) string {
 }
 
 func maskToken(url string) string {
-	// 将 ghp_xxx 替换为 ghp_***
 	if idx := strings.Index(url, "ghp_"); idx != -1 {
 		end := idx + 4
 		for end < len(url) && url[end] != '@' {
@@ -1140,6 +1114,59 @@ func showAuthorsSimple() {
 	for author, count := range counts {
 		fmt.Printf("  %4d  %s\n", count, author)
 	}
+}
+
+func scanTrackedFiles() []string {
+	var result []string
+	patterns := []string{
+		"*.exe", "*.dll", "*.so", "*.dylib",
+		"*.zip", "*.tar.gz", "*.tar", "*.rar", "*.7z",
+		"*.apk", "*.aab", "*.ap_",
+		"*.ipa",
+		"*.jks", "*.keystore",
+		"token.txt", "git-config.txt",
+		"release-key.jks", "release-key.txt",
+	}
+	for _, pattern := range patterns {
+		out := runGit("ls-files", pattern)
+		if out != "" {
+			lines := strings.Split(out, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					result = append(result, line)
+				}
+			}
+		}
+	}
+	seen := make(map[string]bool)
+	var unique []string
+	for _, f := range result {
+		if !seen[f] {
+			seen[f] = true
+			unique = append(unique, f)
+		}
+	}
+	return unique
+}
+
+func buildDeletePatterns(files []string) []string {
+	extMap := make(map[string]bool)
+	var singles []string
+	for _, f := range files {
+		ext := filepath.Ext(f)
+		if ext != "" {
+			extMap["*"+ext] = true
+		} else {
+			singles = append(singles, f)
+		}
+	}
+	var patterns []string
+	for p := range extMap {
+		patterns = append(patterns, p)
+	}
+	patterns = append(patterns, singles...)
+	return patterns
 }
 
 func runGit(args ...string) string {
@@ -1196,30 +1223,4 @@ func pause() {
 	fmt.Println()
 	fmt.Print("按任意键继续...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
-}
-
-func sleep(seconds int) {
-	// 简单等待
-	for i := 0; i < seconds*100000000; i++ {
-	}
-}
-
-func showBanner() {
-	fmt.Println()
-	fmt.Println("    ██████╗ ██╗████████╗    ██████╗ ██╗   ██╗███████╗██╗  ██╗")
-	fmt.Println("   ██╔════╝ ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝██║  ██║")
-	fmt.Println("   ██║  ███╗██║   ██║       ██████╔╝██║   ██║███████╗███████║")
-	fmt.Println("   ██║   ██║██║   ██║       ██╔═══╝ ██║   ██║╚════██║██╔══██║")
-	fmt.Println("   ╚██████╔╝██║   ██║       ██║     ╚██████╔╝███████║██║  ██║")
-	fmt.Println("    ╚═════╝ ╚═╝   ╚═╝       ╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═╝")
-	fmt.Println()
-}
-
-func clearScreen() {
-	// Windows cls
-	cmd := exec.Command("cmd", "/c", "cls")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
-	// 清屏后重新显示标题
-	showBanner()
 }
