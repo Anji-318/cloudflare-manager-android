@@ -1039,7 +1039,15 @@ func initRepo() {
 func readConfig() {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		fmt.Println("[提示] 未找到 git-config.txt，将使用手动输入模式")
+		fmt.Println("[提示] 未找到 git-config.txt，自动生成配置模板...")
+		// 自动生成空的配置模板
+		template := "GITHUB_USERNAME=\nGITHUB_TOKEN=\nREPO_URL=\n"
+		if writeErr := os.WriteFile(configFile, []byte(template), 0644); writeErr != nil {
+			fmt.Printf("[警告] 无法创建 git-config.txt: %v\n", writeErr)
+		} else {
+			fmt.Println("[完成] 已生成空配置模板:", configFile)
+			fmt.Println("[提示] 请填写 GITHUB_USERNAME、GITHUB_TOKEN 和 REPO_URL 后重新运行")
+		}
 		return
 	}
 	lines := strings.Split(string(data), "\n")
