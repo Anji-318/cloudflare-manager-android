@@ -157,12 +157,6 @@ cloudflare-manager-android/
 └── .gitignore
 ```
 
-## 与桌面版的关系
-
-- 原桌面版位于 `C:\Users\Giga\Desktop\cloudflare多账户管理系统`，继续作为 Windows 桌面应用维护。
-- Android 版不再复用其 Rust/Web 代码，而是调用同一套 Cloudflare REST API v4。
-- Token 存储使用 Android 原生加密，与桌面版加密格式不互通。
-
 ## 注意事项
 
 - 首次添加账户时需要联网验证 Token。
