@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -90,12 +91,23 @@ func getTerminalWidth() int {
 	return width
 }
 
-// ========== 清屏并显示标题 ==========
-func clearScreenAndShowBanner(termWidth int, bannerColor string) {
-	// Windows 清屏
-	cmd := exec.Command("cmd", "/c", "cls")
+// ========== 清屏（跨平台） ==========
+func clearScreen() {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", "cls")
+	} else {
+		// Linux, macOS, Termux, Android 等使用 ANSI 清屏
+		fmt.Print("\033[2J\033[H")
+		return
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Run()
+}
+
+// ========== 清屏并显示标题 ==========
+func clearScreenAndShowBanner(termWidth int, bannerColor string) {
+	clearScreen()
 	
 	// 艺术字 - 固定宽度，手动居中
 	artWidth := 62 // 艺术字实际宽度
