@@ -92,21 +92,24 @@ func getTerminalWidth() int {
 
 // ========== 清屏并显示标题 ==========
 func clearScreenAndShowBanner(termWidth int, bannerColor string) {
-	// ANSI清屏
-	fmt.Print("\033[2J\033[H")
+	// Windows 清屏
+	cmd := exec.Command("cmd", "/c", "cls")
+	cmd.Stdout = os.Stdout
+	cmd.Run()
 	
-	// 艺术字
-	lines := []string{
-		"██████╗ ██╗████████╗    ██████╗ ██╗   ██╗███████╗██╗  ██╗",
-		"██╔════╝ ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝██║ ██╔╝",
-		"██║  ███╗██║   ██║       ██████╔╝██║   ██║███████╗█████╔╝ ",
-		"██║   ██║██║   ██║       ██╔═══╝ ██║   ██║╚════██║██╔═██╗ ",
-		"╚██████╔╝██║   ██║       ██║     ╚██████╔╝███████║██║  ██╗",
-		" ╚═════╝ ╚═╝   ╚═╝       ╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═╝",
-	}
-	for _, line := range lines {
-		printCentered(bannerColor+line+ColorReset, termWidth)
-	}
+	// 艺术字 - 固定宽度，手动居中
+	artWidth := 62 // 艺术字实际宽度
+	pad := (termWidth - artWidth) / 2
+	if pad < 0 { pad = 0 }
+	padding := strings.Repeat(" ", pad)
+	
+	fmt.Println()
+	fmt.Println(padding + bannerColor + "  ██████╗ ██╗████████╗    ██████╗ ██╗   ██╗███████╗██╗  ██╗" + ColorReset)
+	fmt.Println(padding + bannerColor + " ██╔════╝ ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝██║  ██║" + ColorReset)
+	fmt.Println(padding + bannerColor + " ██║  ███╗██║   ██║       ██████╔╝██║   ██║███████╗███████║" + ColorReset)
+	fmt.Println(padding + bannerColor + " ██║   ██║██║   ██║       ██╔═══╝ ██║   ██║╚════██║██╔══██║" + ColorReset)
+	fmt.Println(padding + bannerColor + " ╚██████╔╝██║   ██║       ██║     ╚██████╔╝███████║██║  ██║" + ColorReset)
+	fmt.Println(padding + bannerColor + "  ╚═════╝ ╚═╝   ╚═╝       ╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═╝" + ColorReset)
 	fmt.Println()
 }
 
@@ -167,7 +170,7 @@ func main() {
 	}
 
 	// 修复 URL
-	remoteURL = strings.ReplaceAll(remoteURL, "github.comAnji-318", "github.com/Anji-318")
+	remoteURL = strings.ReplaceAll(remoteURL, "github.com<用户名>", "github.com/<用户名>")
 	remoteURL = strings.ReplaceAll(remoteURL, "github.com//", "github.com/")
 	if !strings.HasPrefix(remoteURL, "http://") && !strings.HasPrefix(remoteURL, "https://") {
 		remoteURL = "https://" + remoteURL
@@ -273,13 +276,11 @@ func interactiveMenuLoop(termWidth int) {
 		// 显示菜单选项
 		for i, opt := range options {
 			if i == selected {
-				// 选中项：箭头 + 高亮 + 反色背景
 				fmt.Printf(" %s➤ %s[%s%s%s] %s%s%s\n",
 					ColorCyan, ColorReset,
 					ColorBold+opt.color, opt.key, ColorReset,
 					ColorBold+ColorWhite, opt.text, ColorReset)
 			} else {
-				// 未选中项
 				fmt.Printf("   %s[%s] %s%s\n",
 					opt.color, opt.key, opt.text, ColorReset)
 			}
@@ -300,7 +301,6 @@ func interactiveMenuLoop(termWidth int) {
 			if selected < 0 {
 				selected = len(options) - 1
 			}
-			// 选中变化时艺术字颜色联动变化
 			bannerColor = options[selected].color
 		case keyboard.KeyArrowDown:
 			selected++
@@ -318,7 +318,6 @@ func interactiveMenuLoop(termWidth int) {
 			os.Chdir(originalDir)
 			return
 		default:
-			// 支持数字键 0-9 和字母键 A-L
 			upper := strings.ToUpper(string(char))
 			for i, opt := range options {
 				if opt.key == upper {
@@ -365,7 +364,6 @@ func fallbackMenuLoop(termWidth int) {
 // ========== 执行选项 ==========
 func executeOption(choice string, termWidth int) {
 	// 清屏显示执行中
-	fmt.Print("\033[2J\033[H")
 	clearScreenAndShowBanner(termWidth, ColorGreen)
 
 	switch choice {
@@ -599,9 +597,9 @@ func rewriteHistory() {
 	fmt.Println("[步骤 1/4] 输入要屏蔽的作者信息")
 	fmt.Println()
 	fmt.Println("[提示] 上方列表中显示的即为所有提交作者")
-	fmt.Print("要屏蔽的作者名 (如 Vivo-Max): ")
+	fmt.Print("要屏蔽的作者名 (如 <旧用户名>): ")
 	oldAuthor := readLine()
-	fmt.Print("要屏蔽的作者邮箱 (如 1173287796@qq.com): ")
+	fmt.Print("要屏蔽的作者邮箱 (如 <旧邮箱@example.com>): ")
 	oldEmail := readLine()
 	if oldAuthor == "" {
 		fmt.Println("[错误] 作者名不能为空")
