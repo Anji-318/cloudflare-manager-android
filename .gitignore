@@ -40,6 +40,11 @@ git-config.txt
 打包源码.bat
 生成图标.py
 Android智能编译脚本_v2.0.bat
+cloudflare-manager-android-v0.3.2-src.zip
+cloudflare-manager-android-v0.3.1-src.zip
+cloudflare-manager-android-v0.3.0.apk
+CFManager-v0.3.1.apk
+Git_Push_Tool_Enhanced.bat
 
 # Signing keys
 release-key.jks
