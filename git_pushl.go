@@ -122,10 +122,10 @@ func main() {
 	if idx := strings.Index(cleanURL, "@"); idx != -1 {
 		cleanURL = cleanURL[idx+1:]
 	}
-	if !strings.HasPrefix(cleanURL, "https://") {
+	if !strings.HasPrefix(cleanURL, "https://") && !strings.HasPrefix(cleanURL, "http://") {
 		cleanURL = "https://" + cleanURL
 	}
-	// 重新构建认证URL
+	// 重新构建认证URL（buildAuthURL内部会再次处理，但这里确保传入的是干净的URL）
 	authURL = buildAuthURL(cleanURL, githubUsername, githubToken)
 	fmt.Println("[认证]", maskToken(authURL))
 
@@ -185,6 +185,8 @@ func main() {
 			mergeBranch()
 		case "K":
 			deleteBranch()
+		case "L":
+			removeTrackedFiles()
 		case "0":
 			os.Chdir(originalDir)
 			return
@@ -227,10 +229,11 @@ func showMenu() {
 	fmt.Println("  [I] 硬重置到远程 (git reset --hard)")
 	fmt.Println("  [J] 合并分支 (git merge)")
 	fmt.Println("  [K] 删除本地分支 (git branch -D)")
+	fmt.Println("  [L] 从历史中删除已跟踪的无关文件")
 	fmt.Println("  [0] 退出")
 	fmt.Println()
 	fmt.Println("==========================================")
-	fmt.Print("请选择操作 [0-9,A-K]: ")
+	fmt.Print("请选择操作 [0-9,A-L]: ")
 }
 
 // ==================== 核心功能 ====================
@@ -447,23 +450,12 @@ func rewriteHistory() {
 	showAuthorsSimple()
 	fmt.Println()
 
-	// 检查 git-filter-repo
-	_, err := exec.LookPath("git-filter-repo")
-	if err != nil {
-		fmt.Println("[错误] 未检测到 git-filter-repo！")
-		fmt.Println()
-		fmt.Println("[安装方法] 在命令行中执行：")
-		fmt.Println("  pip install git-filter-repo")
-		pause()
-		return
-	}
-
 	fmt.Println("[步骤 1/4] 输入要屏蔽的作者信息")
 	fmt.Println()
 	fmt.Println("[提示] 上方列表中显示的即为所有提交作者")
 	fmt.Print("要屏蔽的作者名 (如 Vivo-Max): ")
 	oldAuthor := readLine()
-	fmt.Print("要屏蔽的作者邮箱 (如 angxyaa@gmail.com): ")
+	fmt.Print("要屏蔽的作者邮箱 (如 1173287796@qq.com): ")
 	oldEmail := readLine()
 
 	if oldAuthor == "" {
@@ -542,33 +534,43 @@ func rewriteHistory() {
 	fmt.Println("[备份] 创建备份分支 rewrite-backup ...")
 	runGit("branch", "rewrite-backup")
 	fmt.Println("[完成] 备份分支已创建")
+	fmt.Println()
 
-	fmt.Println("[执行] git filter-repo 替换作者信息...")
+	// 使用 git filter-branch（所有Git自带，无需额外安装）
+	fmt.Println("[执行] git filter-branch 替换作者信息...")
+	fmt.Println("[提示] 这可能需要一些时间，请耐心等待...")
+	fmt.Println()
 
-	var cmd *exec.Cmd
+	var envFilter string
 	if oldEmail == "" {
-		callback := fmt.Sprintf(`
-if commit.author_name == '%s':
-    commit.author_name = '%s'
-    commit.author_email = '%s'
-    commit.committer_name = '%s'
-    commit.committer_email = '%s'`, oldAuthor, newAuthor, newEmail, newAuthor, newEmail)
-		cmd = exec.Command("git", "filter-repo", "--commit-callback", callback)
+		// 只按作者名匹配
+		envFilter = fmt.Sprintf(`
+if [ "$GIT_AUTHOR_NAME" = "%s" ]; then
+	export GIT_AUTHOR_NAME="%s"
+	export GIT_AUTHOR_EMAIL="%s"
+	export GIT_COMMITTER_NAME="%s"
+	export GIT_COMMITTER_EMAIL="%s"
+fi`, oldAuthor, newAuthor, newEmail, newAuthor, newEmail)
 	} else {
-		callback := fmt.Sprintf(`
-if commit.author_name == '%s' or commit.author_email == '%s':
-    commit.author_name = '%s'
-    commit.author_email = '%s'
-    commit.committer_name = '%s'
-    commit.committer_email = '%s'`, oldAuthor, oldEmail, newAuthor, newEmail, newAuthor, newEmail)
-		cmd = exec.Command("git", "filter-repo", "--commit-callback", callback)
+		// 按作者名或邮箱匹配
+		envFilter = fmt.Sprintf(`
+if [ "$GIT_AUTHOR_NAME" = "%s" ] || [ "$GIT_AUTHOR_EMAIL" = "%s" ]; then
+	export GIT_AUTHOR_NAME="%s"
+	export GIT_AUTHOR_EMAIL="%s"
+	export GIT_COMMITTER_NAME="%s"
+	export GIT_COMMITTER_EMAIL="%s"
+fi`, oldAuthor, oldEmail, newAuthor, newEmail, newAuthor, newEmail)
 	}
+
+	cmd := exec.Command("git", "filter-branch", "--env-filter", envFilter, "--force", "HEAD")
 	cmd.Dir = projectDir
-	out, err := cmd.CombinedOutput()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+
 	if err != nil {
 		fmt.Println()
-		fmt.Println("[失败] git filter-repo 执行失败！")
-		fmt.Println(string(out))
+		fmt.Println("[失败] git filter-branch 执行失败！")
 		fmt.Println("[恢复] 可以从备份分支恢复: git checkout rewrite-backup")
 		pause()
 		return
@@ -583,6 +585,168 @@ if commit.author_name == '%s' or commit.author_email == '%s':
 	fmt.Println("[下一步] 请选择 [2] 强制覆盖推送")
 	fmt.Println("[提示] GitHub 会在几小时内更新 Contributors 列表")
 	pause()
+}
+
+// ==================== 新增功能：从历史中删除已跟踪的无关文件 ====================
+
+func removeTrackedFiles() {
+	clearScreen()
+	fmt.Println("==========================================")
+	fmt.Println("     从历史中删除已跟踪的无关文件")
+	fmt.Println("==========================================")
+	fmt.Println()
+	fmt.Println("[警告] 此操作会重写所有 commit 的 hash 值！")
+	fmt.Println("[警告] 远程仓库的历史将被完全替换！")
+	fmt.Println()
+	fmt.Println("[说明] .gitignore 只能忽略未跟踪的新文件")
+	fmt.Println("[说明] 对于已错误提交的文件，需要重写历史才能彻底删除")
+	fmt.Println()
+
+	// 扫描已跟踪的常见问题文件
+	fmt.Println("[扫描] 检测已跟踪的常见问题文件...")
+	fmt.Println()
+
+	trackedFiles := scanTrackedFiles()
+	if len(trackedFiles) == 0 {
+		fmt.Println("[信息] 未发现已跟踪的无关文件，.gitignore 工作正常")
+		pause()
+		return
+	}
+
+	fmt.Println("[发现] 以下文件已跟踪（会被提交到仓库）：")
+	fmt.Println()
+	for _, f := range trackedFiles {
+		fmt.Printf("  - %s\n", f)
+	}
+	fmt.Println()
+
+	if !confirm("是否删除这些文件（重写历史）") {
+		return
+	}
+
+	// 构建删除模式（按扩展名分组）
+	patterns := buildDeletePatterns(trackedFiles)
+
+	clearScreen()
+	fmt.Println("[步骤 1/3] 创建备份...")
+	runGit("branch", "delete-files-backup")
+	fmt.Println("[完成] 备份分支 delete-files-backup 已创建")
+	fmt.Println()
+
+	fmt.Println("[步骤 2/3] 执行 git filter-branch 删除文件...")
+	fmt.Println("[提示] 这可能需要一些时间，请耐心等待...")
+	fmt.Println()
+
+	// 构建 index-filter 命令
+	var rmCmd string
+	if len(patterns) == 1 {
+		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", patterns[0])
+	} else {
+		rmCmd = fmt.Sprintf("git rm --cached --ignore-unmatch %s", strings.Join(patterns, " "))
+	}
+
+	cmd := exec.Command("git", "filter-branch", "--force", "--index-filter", rmCmd, "--prune-empty", "--", "HEAD")
+	cmd.Dir = projectDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+
+	if err != nil {
+		fmt.Println()
+		fmt.Println("[失败] 删除失败！")
+		fmt.Println("[恢复] 可以从备份分支恢复: git checkout delete-files-backup")
+		pause()
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("[步骤 3/3] 验证结果...")
+	fmt.Println()
+
+	// 重新扫描验证
+	remaining := scanTrackedFiles()
+	if len(remaining) == 0 {
+		fmt.Println("[成功] 所有无关文件已从历史中彻底删除！")
+		fmt.Println()
+		fmt.Println("[下一步] 请选择 [2] 强制覆盖推送")
+	} else {
+		fmt.Println("[警告] 以下文件仍存在于历史中：")
+		for _, f := range remaining {
+			fmt.Printf("  - %s\n", f)
+		}
+		fmt.Println()
+		fmt.Println("[提示] 可能需要手动指定文件名删除")
+	}
+
+	fmt.Println()
+	fmt.Println("[提示] 本地文件仍然保留，只是从 Git 历史中移除")
+	pause()
+}
+
+// 扫描已跟踪的常见问题文件
+func scanTrackedFiles() []string {
+	var result []string
+
+	// 常见需要忽略的文件模式
+	patterns := []string{
+		"*.exe", "*.dll", "*.so", "*.dylib",
+		"*.zip", "*.tar.gz", "*.tar", "*.rar", "*.7z",
+		"*.apk", "*.aab", "*.ap_",
+		"*.ipa",
+		"*.jks", "*.keystore",
+		"token.txt", "git-config.txt",
+		"release-key.jks", "release-key.txt",
+	}
+
+	for _, pattern := range patterns {
+		out := runGit("ls-files", pattern)
+		if out != "" {
+			lines := strings.Split(out, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					result = append(result, line)
+				}
+			}
+		}
+	}
+
+	// 去重
+	seen := make(map[string]bool)
+	var unique []string
+	for _, f := range result {
+		if !seen[f] {
+			seen[f] = true
+			unique = append(unique, f)
+		}
+	}
+
+	return unique
+}
+
+// 构建删除模式（合并相同扩展名）
+func buildDeletePatterns(files []string) []string {
+	// 按扩展名分组
+	extMap := make(map[string]bool)
+	var singles []string
+
+	for _, f := range files {
+		ext := filepath.Ext(f)
+		if ext != "" {
+			extMap["*"+ext] = true
+		} else {
+			// 无扩展名的单独文件
+			singles = append(singles, f)
+		}
+	}
+
+	var patterns []string
+	for p := range extMap {
+		patterns = append(patterns, p)
+	}
+	patterns = append(patterns, singles...)
+
+	return patterns
 }
 
 // ==================== 新增功能 ====================
@@ -924,8 +1088,10 @@ func readConfig() {
 }
 
 func buildAuthURL(url, username, token string) string {
+	// 只处理协议头，保留其余部分
 	url = strings.TrimPrefix(url, "https://")
-	// 去掉已有的认证信息
+	url = strings.TrimPrefix(url, "http://")
+	// 去掉已有的认证信息（如果有 @）
 	if idx := strings.Index(url, "@"); idx != -1 {
 		url = url[idx+1:]
 	}
